@@ -612,7 +612,8 @@ static int cmd_logout(const char *session_id) {
     return session_destroy(session_id);
 }
 
-static int cmd_check(const char *session_id) {
+/* internal: used by whoami */
+static int session_valid(const char *session_id) {
     if (!session_id) return 1;
     if (!is_valid_session_id(session_id)) return 1;
     if (!session_exists(session_id)) return 1;
@@ -625,118 +626,17 @@ static int cmd_touch(const char *session_id) {
     return session_touch(session_id);
 }
 
-static int cmd_info(const char *session_id) {
-    char username[MAX_NAME + 1];
-    char path[PATH_MAX];
-    long created, active, now, uptime, idle;
-
-    if (!session_id) return 1;
-    if (!is_valid_session_id(session_id)) return 1;
-    if (!session_exists(session_id)) return 1;
-
-    if (session_get_user(session_id, username) != 0) return 1;
-
-    if (!session_path(session_id, "created", path)) return 1;
-    if (!read_file_long_locked(path, &created)) return 1;
-
-    if (!session_path(session_id, "active", path)) return 1;
-    if (!read_file_long_locked(path, &active)) return 1;
-
-    now = current_time();
-
-    if (created < 0 || active < 0) return 1;
-
-    uptime = now - created;
-    idle = now - active;
-
-    printf("user:%s\n", username);
-    printf("created:%ld\n", created);
-    printf("uptime:%ld\n", uptime);
-    printf("idle:%ld\n", idle);
-    printf("expired:%d\n", idle > SESSION_TIMEOUT ? 1 : 0);
-
-    return 0;
-}
-
 static int cmd_whoami(const char *session_id) {
     char username[MAX_NAME + 1];
 
     if (!session_id) return 1;
-    if (cmd_check(session_id) != 0) return 1;
+    if (session_valid(session_id) != 0) return 1;
     if (session_get_user(session_id, username) != 0) return 1;
 
     printf("%s\n", username);
     return 0;
 }
 
-static int cmd_list(void) {
-    DIR *d;
-    struct dirent *ent;
-    char username[MAX_NAME + 1];
-    char path[PATH_MAX];
-    long created, active;
-    long now;
-    int count = 0;
-
-    d = opendir(SESSION_DIR);
-    if (!d) {
-        printf("0 sessions\n");
-        return 0;
-    }
-
-    now = current_time();
-
-    while ((ent = readdir(d)) != NULL) {
-        if (*(ent->d_name) == '.') continue;
-        if (!is_valid_session_id(ent->d_name)) continue;
-
-        if (session_get_user(ent->d_name, username) != 0) continue;
-
-        if (!session_path(ent->d_name, "created", path)) continue;
-        if (!read_file_long_locked(path, &created)) continue;
-
-        if (!session_path(ent->d_name, "active", path)) continue;
-        if (!read_file_long_locked(path, &active)) continue;
-
-        if (created < 0 || active < 0) continue;
-
-        printf("%s %s uptime:%ld idle:%ld%s\n",
-               ent->d_name, username,
-               now - created, now - active,
-               (now - active > SESSION_TIMEOUT) ? " [expired]" : "");
-        count++;
-    }
-
-    closedir(d);
-    printf("%d session(s)\n", count);
-    return 0;
-}
-
-static int cmd_cleanup(void) {
-    DIR *d;
-    struct dirent *ent;
-    char path[PATH_MAX];
-    int removed = 0;
-
-    d = opendir(SESSION_DIR);
-    if (!d) return 0;
-
-    while ((ent = readdir(d)) != NULL) {
-        if (*(ent->d_name) == '.') continue;
-        if (!is_valid_session_id(ent->d_name)) continue;
-
-        if (session_is_expired(ent->d_name)) {
-            if (session_path(ent->d_name, NULL, path)) {
-                rmdir_r(path);
-                removed++;
-            }
-        }
-    }
-
-    closedir(d);
-    printf("%d session(s) removed\n", removed);
-    return 0;
-}
 
 /* ---------- main ---------- */
 
@@ -744,12 +644,8 @@ static void print_usage(void) {
     fprintf(stderr, "usage:\n");
     fprintf(stderr, "  session login <name> <key>\n");
     fprintf(stderr, "  session logout <session_id>\n");
-    fprintf(stderr, "  session check <session_id>\n");
     fprintf(stderr, "  session touch <session_id>\n");
-    fprintf(stderr, "  session info <session_id>\n");
     fprintf(stderr, "  session whoami <session_id>\n");
-    fprintf(stderr, "  session list\n");
-    fprintf(stderr, "  session cleanup\n");
 }
 
 int main(int argc, char **argv) {
@@ -768,32 +664,14 @@ int main(int argc, char **argv) {
         return cmd_logout(*(argv + 2));
     }
 
-    if (strcmp(*(argv + 1), "check") == 0) {
-        if (argc != 3) { print_usage(); return 1; }
-        return cmd_check(*(argv + 2));
-    }
-
     if (strcmp(*(argv + 1), "touch") == 0) {
         if (argc != 3) { print_usage(); return 1; }
         return cmd_touch(*(argv + 2));
     }
 
-    if (strcmp(*(argv + 1), "info") == 0) {
-        if (argc != 3) { print_usage(); return 1; }
-        return cmd_info(*(argv + 2));
-    }
-
     if (strcmp(*(argv + 1), "whoami") == 0) {
         if (argc != 3) { print_usage(); return 1; }
         return cmd_whoami(*(argv + 2));
-    }
-
-    if (strcmp(*(argv + 1), "list") == 0) {
-        return cmd_list();
-    }
-
-    if (strcmp(*(argv + 1), "cleanup") == 0) {
-        return cmd_cleanup();
     }
 
     print_usage();
