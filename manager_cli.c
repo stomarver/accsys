@@ -1,5 +1,5 @@
 /* ===== manager_cli — unified (2026-06-18) ===== */
-/* register / rename / rekey + check (no login, no exit) */
+/* register / rename / rekey (no login, no exit) */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -15,7 +15,6 @@
 #include <ctype.h>
 
 #define MANAGER_BIN    "./manager"
-#define CHECK_BIN      "./check"
 #define MAX_LINE       4096
 #define INPUT_BUF_SZ   256
 #define FPS            20
@@ -190,6 +189,8 @@ static void render_login_frame(const char *header, const char *input, int cursor
     move_cursor(1, 1);
     print_inverted_full(header);
     move_cursor(2, 1);
+    fputs(ANSI_CL, stdout);
+    move_cursor(3, 1);
     fputs(" > ", stdout);
     fputs(input, stdout);
     if (cursor_on) {
@@ -210,6 +211,8 @@ static void render_message_frame(const char *header, const char *message) {
     move_cursor(1, 1);
     print_inverted_full(header);
     move_cursor(2, 1);
+    fputs(ANSI_CL, stdout);
+    move_cursor(3, 1);
     fputs(" > ", stdout);
     fputs(message, stdout);
     fputs(ANSI_CL, stdout);
@@ -232,20 +235,6 @@ static void show_result(const char *title, const char *step, int res) {
 
 /* ================ UI — menu frame ================ */
 
-static void show_check_output(void) {
-    term_restore();
-    printf("\n");
-    fflush(stdout);
-    system(CHECK_BIN);
-    printf("\n-- press any key to continue --\n");
-    fflush(stdout);
-    term_raw_mode();
-    while (input_available()) read_char();
-    while (!input_available()) sleep_us(FRAME_USEC);
-    read_char();
-    while (input_available()) read_char();
-}
-
 static void render_menu_frame(const char *input, int cursor_on) {
     int pad, i;
 
@@ -255,7 +244,7 @@ static void render_menu_frame(const char *input, int cursor_on) {
     move_cursor(1, 1);
 
     if (use_color) {
-        int fixed = 10 + 11 + 9 + 11;  /* " ctrl + re"=10, "ister / re"=11, "ame / re"=9, "ey / check"=11 */
+        int fixed = 33;  /* visible length of " ctrl + register / rename / rekey" */
         pad = term_cols - fixed;
         if (pad < 0) pad = 0;
 
@@ -272,15 +261,18 @@ static void render_menu_frame(const char *input, int cursor_on) {
 
         fputs(ANSI_RREV, stdout); putchar('k');
         fputs(ANSI_RST ANSI_REV, stdout);
-        fputs("ey / check", stdout);
+        fputs("ey", stdout);
 
         for (i = 0; i < pad; i++) putchar(' ');
         fputs(ANSI_RST, stdout);
     } else {
-        print_inverted_full(" ctrl + register / rename / rekey / check");
+        print_inverted_full(" ctrl + register / rename / rekey");
     }
 
     move_cursor(2, 1);
+    fputs(ANSI_CL, stdout);
+
+    move_cursor(3, 1);
     fputs(" > ", stdout);
     fputs(input, stdout);
     if (cursor_on) {
@@ -396,12 +388,6 @@ static int interactive_mode(void) {
     while (run) {
         r = prompt_menu_choice(choice, sizeof(choice));
         if (r <= 0) { run = 0; continue; }
-
-        if (strcmp(choice, "check") == 0 || strcmp(choice, "4") == 0) {
-            show_check_output();
-            clear_screen();
-            continue;
-        }
 
         if (strcmp(choice, "register") == 0 || strcmp(choice, "1") == 0) {
             r = prompt_line("register", "name", name, sizeof(name));
