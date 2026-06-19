@@ -114,30 +114,39 @@ static int read_char(void) {
 
 /* ================ backend helpers ================ */
 
-static int call_manager(const char *cmd) {
-    int ret = system(cmd);
-    if (ret == -1) return 1;
-    return WEXITSTATUS(ret);
-}
+
 
 /* ================ manager backend ================ */
 
+
+
+
+
+static int call_manager(char *const args[]) {
+    pid_t pid;
+    int status;
+    if ((pid = fork()) == -1) return 1;
+    if (pid == 0) {
+        execv(args[0], args);
+        exit(1);
+    }
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
 static int backend_register(const char *name, const char *key) {
-    char cmd[MAX_LINE];
-    snprintf(cmd, sizeof(cmd), "%s register '%s' '%s'", MANAGER_BIN, name, key);
-    return call_manager(cmd);
+    char *args[] = { MANAGER_BIN, "register", (char *)name, (char *)key, NULL };
+    return call_manager(args);
 }
 
 static int backend_rename(const char *name, const char *key, const char *new_name) {
-    char cmd[MAX_LINE];
-    snprintf(cmd, sizeof(cmd), "%s rename '%s' '%s' '%s'", MANAGER_BIN, name, key, new_name);
-    return call_manager(cmd);
+    char *args[] = { MANAGER_BIN, "rename", (char *)name, (char *)key, (char *)new_name, NULL };
+    return call_manager(args);
 }
 
 static int backend_rekey(const char *name, const char *old_key, const char *new_key) {
-    char cmd[MAX_LINE];
-    snprintf(cmd, sizeof(cmd), "%s rekey '%s' '%s' '%s'", MANAGER_BIN, name, old_key, new_key);
-    return call_manager(cmd);
+    char *args[] = { MANAGER_BIN, "rekey", (char *)name, (char *)old_key, (char *)new_key, NULL };
+    return call_manager(args);
 }
 
 /* ================ UI — primitives ================ */
@@ -306,9 +315,18 @@ static int prompt_menu_choice(char *buf, size_t bufsz) {
 
             if (ch == '\n' || ch == '\r') return 1;
             if (ch == CTRL_D) return 0;
-            if (ch == CTRL_C || ch == ESC) {
+            if (ch == CTRL_C) {
                 while (input_available()) read_char();
                 return -1;
+            }
+            if (ch == ESC) {
+                if (input_available()) {
+                    while (input_available()) read_char();
+                    cursor_on = 1; frame = 0;
+                    continue;
+                } else {
+                    return -1;
+                }
             }
 
             if (ch == CTRL_G) { strcpy(buf, "register"); return 1; }
@@ -320,7 +338,7 @@ static int prompt_menu_choice(char *buf, size_t bufsz) {
                 cursor_on = 1; frame = 0;
                 continue;
             }
-            if (ch >= 32 && ch < 127 && pos < bufsz - 1) {
+            if (ch >= 32 && ch != 127 && pos < bufsz - 1) {
                 buf[pos++] = (char)ch;
                 buf[pos] = 0;
                 cursor_on = 1; frame = 0;
@@ -353,16 +371,25 @@ static int prompt_line(const char *title, const char *step,
 
             if (ch == '\n' || ch == '\r') return 1;
             if (ch == CTRL_D) return 0;
-            if (ch == CTRL_C || ch == ESC) {
+            if (ch == CTRL_C) {
                 while (input_available()) read_char();
                 return -1;
+            }
+            if (ch == ESC) {
+                if (input_available()) {
+                    while (input_available()) read_char();
+                    cursor_on = 1; frame = 0;
+                    continue;
+                } else {
+                    return -1;
+                }
             }
             if (ch == 127 || ch == 8) {
                 if (pos > 0) buf[--pos] = 0;
                 cursor_on = 1; frame = 0;
                 continue;
             }
-            if (ch >= 32 && ch < 127 && pos < bufsz - 1) {
+            if (ch >= 32 && ch != 127 && pos < bufsz - 1) {
                 buf[pos++] = (char)ch;
                 buf[pos] = 0;
                 cursor_on = 1; frame = 0;

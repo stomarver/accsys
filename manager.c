@@ -140,59 +140,68 @@ static int write_file_line(const char *path, const char *content) {
 
 /* ---------- generator ---------- */
 
-static char *run_generator_cmd(const char *cmd) {
-    FILE *fp;
-    char *result;
 
-    if (!cmd) return NULL;
-    result = malloc(MAX_LINE);
-    if (!result) return NULL;
+static char *run_generator_cmd(char *const args[]) {
+    int link[2];
+    pid_t pid;
+    char *result = NULL;
 
-    fp = popen(cmd, "r");
-    if (!fp) {
-        free(result);
+    if (pipe(link) == -1) return NULL;
+
+    if ((pid = fork()) == -1) {
+        close(link[0]); close(link[1]);
         return NULL;
     }
 
-    if (!fgets(result, MAX_LINE, fp)) {
-        pclose(fp);
-        free(result);
-        return NULL;
+    if (pid == 0) {
+        dup2(link[1], STDOUT_FILENO);
+        close(link[0]); close(link[1]);
+        execv(args[0], args);
+        exit(1);
+    } else {
+        close(link[1]);
+        result = malloc(MAX_LINE);
+        if (result) {
+            FILE *fp = fdopen(link[0], "r");
+            if (fp) {
+                if (!fgets(result, MAX_LINE, fp)) {
+                    free(result); result = NULL;
+                }
+                fclose(fp);
+            } else { free(result); result = NULL; close(link[0]); }
+        } else { close(link[0]); }
+        waitpid(pid, NULL, 0);
+        if (result) trim_nl(result);
+        return result;
     }
-
-    pclose(fp);
-    trim_nl(result);
-    return result;
 }
 
-static int run_generator_exit(const char *cmd) {
-    int ret = system(cmd);
-    if (ret == -1) return 1;
-    return WEXITSTATUS(ret);
+static int run_generator_exit(char *const args[]) {
+    pid_t pid;
+    int status;
+    if ((pid = fork()) == -1) return 1;
+    if (pid == 0) {
+        execv(args[0], args);
+        exit(1);
+    }
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
 static char *generator_uuid(void) {
-    return run_generator_cmd(GENERATOR_BIN " uuid");
+    char *args[] = { GENERATOR_BIN, "uuid", NULL };
+    return run_generator_cmd(args);
 }
 
 static char *generator_encrypt_key(const char *key) {
-    char *cmd;
-    char *result;
-
     if (!key) return NULL;
-    cmd = malloc(MAX_LINE);
-    if (!cmd) return NULL;
-
-    snprintf(cmd, MAX_LINE, "%s encrypt '%s'", GENERATOR_BIN, key);
-    result = run_generator_cmd(cmd);
-    free(cmd);
-    return result;
+    char *args[] = { GENERATOR_BIN, "encrypt", (char *)key, NULL };
+    return run_generator_cmd(args);
 }
 
 static int generator_verify_key(const char *stored, const char *key) {
-    char cmd[MAX_LINE];
-    snprintf(cmd, MAX_LINE, "%s verify '%s' '%s'", GENERATOR_BIN, stored, key);
-    return run_generator_exit(cmd);
+    char *args[] = { GENERATOR_BIN, "verify", (char *)stored, (char *)key, NULL };
+    return run_generator_exit(args);
 }
 
 /* ---------- resolve ---------- */
@@ -261,6 +270,29 @@ static int resolve_plain_dir(const char *name, char *dir_out) {
     return is_directory(dir_out);
 }
 
+static int is_secure_non_uuid(const char *name) {
+    char user_dir[PATH_MAX];
+    char key_file[PATH_MAX];
+    if (!join2(user_dir, PATH_MAX, BASE_DIR, name)) return 0;
+    if (!is_directory(user_dir)) return 0;
+    if (!join2(key_file, PATH_MAX, user_dir, "key")) return 0;
+    return path_exists(key_file);
+}
+
+static int auth_non_uuid_secure(const char *identifier, const char *key) {
+    char user_dir[PATH_MAX];
+    char key_file[PATH_MAX];
+    char stored_key[MAX_LINE];
+
+    if (!generator_available()) return 1;
+    if (!join2(user_dir, PATH_MAX, BASE_DIR, identifier)) return 1;
+    if (!is_directory(user_dir)) return 1;
+    if (!join2(key_file, PATH_MAX, user_dir, "key")) return 1;
+    if (!read_file_line(key_file, stored_key, MAX_LINE)) return 1;
+
+    return generator_verify_key(stored_key, key);
+}
+
 /* ---------- internal auth ---------- */
 
 static int auth_plain(const char *identifier, const char *key) {
@@ -321,6 +353,10 @@ static int auth_secure(const char *identifier, const char *key) {
 static int auth(const char *identifier, const char *key) {
     if (!identifier || !key) return 1;
     if (!is_valid_name(identifier)) return 1;
+
+    if (auth_non_uuid_secure(identifier, key) == 0) return 0;
+
+    if (!is_secure_non_uuid(identifier) && !is_valid_key(key)) return 1;
 
     if (auth_plain(identifier, key) == 0) return 0;
 
@@ -417,6 +453,7 @@ static int cmd_register_generator(const char *name, const char *key) {
 
 static int cmd_register(const char *name, const char *key) {
     if (!name || !key) return 1;
+    if (strcmp(name, "admin") == 0) return 1;
     if (!is_valid_name(name)) return 1;
     if (!is_valid_key(key)) return 1;
     if (!mkdir_p(BASE_DIR)) return 1;
@@ -486,8 +523,9 @@ static int cmd_rename_secure(const char *identifier, const char *new_name) {
 
 static int cmd_rename(const char *identifier, const char *key, const char *new_name) {
     if (!identifier || !key || !new_name) return 1;
+    if (strcmp(identifier, "admin") == 0) return 1;
     if (!is_valid_name(new_name)) return 1;
-    if (!is_valid_key(key)) return 1;
+    if (!is_secure_non_uuid(identifier) && !is_valid_key(key)) return 1;
     if (auth(identifier, key) != 0) return 1;
 
     if (generator_available()) {
@@ -552,7 +590,20 @@ static int cmd_rekey_secure(const char *identifier, const char *new_key) {
         return 1;
     }
 
-    if (!resolve_uuid_dir(identifier, uuid_dir, NULL)) goto done;
+    if (!resolve_uuid_dir(identifier, uuid_dir, NULL)) {
+        // Check if it is a secure non-UUID account
+        char temp_key[PATH_MAX];
+        if (join2(temp_key, PATH_MAX, BASE_DIR, identifier) && is_directory(temp_key)) {
+            char key_file_check[PATH_MAX];
+            if (join2(key_file_check, PATH_MAX, temp_key, "key") && path_exists(key_file_check)) {
+                strcpy(uuid_dir, temp_key);
+            } else {
+                goto done;
+            }
+        } else {
+            goto done;
+        }
+    }
 
     enc_key = generator_encrypt_key(new_key);
     if (!enc_key) goto done;
@@ -570,7 +621,8 @@ static int cmd_rekey_secure(const char *identifier, const char *new_key) {
 
 static int cmd_rekey(const char *identifier, const char *old_key, const char *new_key) {
     if (!identifier || !old_key || !new_key) return 1;
-    if (!is_valid_key(old_key)) return 1;
+    if (strcmp(identifier, "admin") == 0) return 1;
+    if (!is_secure_non_uuid(identifier) && !is_valid_key(old_key)) return 1;
     if (!is_valid_key(new_key)) return 1;
     if (auth(identifier, old_key) != 0) return 1;
 
