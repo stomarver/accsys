@@ -1,21 +1,40 @@
 # Makefile для accsys
-# Бинарники: generator, manager, manager_cli, client, client_cli, server
+# Бинарники: shared/generator, shared/manager, shared/manager_cli, client/client, client/client_cli, server/server
 
 CC      := gcc
-CFLAGS  := -O2 -Wall -Wextra -Wpedantic -std=c99 -D_POSIX_C_SOURCE=200809L
-BINS    := generator manager manager_cli client client_cli server
+CFLAGS  := -O2 -Wall -Wextra -Wpedantic -std=c99 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
+BINS    := shared/generator shared/manager shared/manager_cli client/client client/client_cli server/server
 
 .PHONY: all clean debug
 
 all: $(BINS)
 
-# Универсальное правило: бинарник X собирается из X.c
-%: %.c
+shared/generator: shared/generator.c
 	$(CC) $(CFLAGS) -o $@ $<
+	chmod +x $@
+
+shared/manager: shared/manager.c
+	$(CC) $(CFLAGS) -o $@ $<
+	chmod +x $@
+
+shared/manager_cli: shared/manager_cli.c
+	$(CC) $(CFLAGS) -o $@ $<
+	chmod +x $@
+
+client/client: client/client.c
+	$(CC) $(CFLAGS) -o $@ $<
+	chmod +x $@
+
+client/client_cli: client/client_cli.c
+	$(CC) $(CFLAGS) -o $@ $<
+	chmod +x $@
+
+server/server: server/server.c
+	$(CC) $(CFLAGS) -o $@ $<
+	chmod +x $@
 
 clean:
 	rm -f $(BINS) *.o
 
-# Отладочная сборка с AddressSanitizer / UBSan
-debug: CFLAGS := -g -O0 -Wall -Wextra -Wpedantic -std=c99 -D_POSIX_C_SOURCE=200809L -fsanitize=address,undefined
+debug: CFLAGS := -g -O0 -Wall -Wextra -Wpedantic -std=c99 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -fsanitize=address,undefined
 debug: clean all
